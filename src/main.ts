@@ -1,9 +1,48 @@
-import type {Parameter} from 'optis'
-import type {Config, CustomSyntax, Plugin} from 'stylelint'
-import type {Arrayable, Merge} from 'type-fest'
+import type {Config} from 'stylelint'
+import type {Arrayable} from 'type-fest'
 
 import {castArray} from 'es-toolkit/compat'
 import optis from 'optis'
+
+type Extension = 'css' | 'sass' | 'scss'
+type RuleSecondaryOptions = Record<string, unknown>
+type RulePrimary = Array<unknown> | Record<string, unknown> | RegExp | boolean | number | string
+type RuleSetting = [RulePrimary, RuleSecondaryOptions] | [RulePrimary] | RulePrimary | null | undefined
+type Rules = Record<string, RuleSetting>
+type RuleList = Arrayable<string>
+type CustomizedRuleList = Record<string, RuleSetting>
+type PluginList = NonNullable<Extract<Config['plugins'], Array<unknown>>>
+type PluginRuleList = Record<string, RuleList>
+type PluginCustomizedRuleList = Record<string, CustomizedRuleList>
+type ConfigOverride = NonNullable<Config['overrides']>[number]
+type OptionsSchema = {
+  process: (inputOptions?: MakeStylelintOptions) => ProcessedMakeStylelintOptions
+}
+
+const postcssSassPackageName = 'postcss-sass'
+const postcssScssPackageName = 'postcss-scss'
+const stylelintScssPackageName = 'stylelint-scss'
+const warningSeverity = {severity: 'warning'} as const
+
+export type MakeStylelintOptions = {
+  config?: Partial<Config>
+  errors?: RuleList
+  errorsCustomized?: CustomizedRuleList
+  extensions?: Arrayable<Extension>
+  off?: RuleList
+  pluginErrors?: PluginRuleList
+  pluginErrorsCustomized?: PluginCustomizedRuleList
+  pluginOff?: PluginRuleList
+  plugins?: Config['plugins']
+  pluginWarnings?: PluginRuleList
+  pluginWarningsCustomized?: PluginCustomizedRuleList
+  warnings?: RuleList
+  warningsCustomized?: CustomizedRuleList
+}
+
+type ProcessedMakeStylelintOptions = Omit<MakeStylelintOptions, 'extensions'> & {
+  extensions: Arrayable<Extension>
+}
 
 /**
  * Order of precedence:
@@ -13,119 +52,169 @@ import optis from 'optis'
  * - `errorsCustomized`
  * - `pluginWarningsCustomized`
  * - `warningsCustomized`
- * - `plugins`
+ * - `pluginErrors`
  * - `errors`
  * - `pluginWarnings`
  * - `warnings`
  */
-export const optionsSchema = optis({
+const internalOptionsSchema = optis({
   defaults: {
-    extensions: ['sass', 'css'] as Arrayable<'css' | 'sass' | 'scss'>,
+    extensions: ['sass', 'css'] as Arrayable<Extension>,
   },
 }).extendTyped<{
   optional: {
-    config: Partial<Config>
-    errors: RuleList
-    errorsCustomized: CustomizedRuleList
-    off: RuleList
-    pluginErrors: Dict<RuleList>
-    pluginErrorsCustomized: Dict<CustomizedRuleList>
-    pluginOff: Dict<RuleList>
-    plugins: Config['plugins']
-    pluginWarnings: Dict<RuleList>
-    pluginWarningsCustomized: Dict<CustomizedRuleList>
-    warnings: RuleList
-    warningsCustomized: CustomizedRuleList
+    config: MakeStylelintOptions['config']
+    errors: MakeStylelintOptions['errors']
+    errorsCustomized: MakeStylelintOptions['errorsCustomized']
+    off: MakeStylelintOptions['off']
+    pluginErrors: MakeStylelintOptions['pluginErrors']
+    pluginErrorsCustomized: MakeStylelintOptions['pluginErrorsCustomized']
+    pluginOff: MakeStylelintOptions['pluginOff']
+    plugins: MakeStylelintOptions['plugins']
+    pluginWarnings: MakeStylelintOptions['pluginWarnings']
+    pluginWarningsCustomized: MakeStylelintOptions['pluginWarningsCustomized']
+    warnings: MakeStylelintOptions['warnings']
+    warningsCustomized: MakeStylelintOptions['warningsCustomized']
   }
 }>()
-
-type RuleList = Arrayable<string>
-type CustomizedRuleList = Record<string, unknown>
-
-const makeConfig = async (inputOptions: Parameter<typeof optionsSchema>) => {
-  const options = optionsSchema.process(inputOptions)
-  const rules: Record<string, unknown> = {}
-  const addRule = (rule: string, customizationOptions?: unknown) => {
-    if (Object.hasOwn(rules, rule)) {
-      return
-    }
-    rules[rule] = customizationOptions
+export const optionsSchema = internalOptionsSchema as unknown as OptionsSchema
+const addRule = (rules: Rules, rule: string, ruleSetting: RuleSetting) => {
+  if (ruleSetting === undefined || Object.hasOwn(rules, rule)) {
+    return
   }
-  if (options.pluginOff) {
-    for (const [plugin, pluginOff] of Object.entries(options.pluginOff)) {
-      for (const rule of castArray(pluginOff)) {
-        addRule(`${plugin}/${rule}`, null)
-      }
-    }
+  rules[rule] = ruleSetting
+}
+const addRules = (rules: Rules, ruleList?: RuleList, ruleSetting: RuleSetting = true) => {
+  if (!ruleList) {
+    return
   }
-  if (options.off) {
-    for (const rule of castArray(options.off)) {
-      addRule(rule, null)
-    }
+  for (const rule of castArray(ruleList)) {
+    addRule(rules, rule, ruleSetting)
   }
-  if (options.pluginErrorsCustomized) {
-    for (const [plugin, pluginErrorsCustomized] of Object.entries(options.pluginErrorsCustomized)) {
-      for (const [rule, customizationOptions] of Object.entries(pluginErrorsCustomized)) {
-        addRule(`${plugin}/${rule}`, customizationOptions)
-      }
-    }
+}
+const addCustomizedRules = (rules: Rules, customizedRuleList?: CustomizedRuleList, transformRuleSetting: (ruleSetting: RuleSetting) => RuleSetting = ruleSetting => ruleSetting) => {
+  if (!customizedRuleList) {
+    return
   }
-  if (options.errorsCustomized) {
-    for (const [rule, customizationOptions] of Object.entries(options.errorsCustomized)) {
-      addRule(rule, customizationOptions)
+  for (const [rule, ruleSetting] of Object.entries(customizedRuleList)) {
+    addRule(rules, rule, transformRuleSetting(ruleSetting))
+  }
+}
+const addPluginRules = (rules: Rules, pluginRuleList?: PluginRuleList, ruleSetting: RuleSetting = true) => {
+  if (!pluginRuleList) {
+    return
+  }
+  for (const [plugin, currentRuleList] of Object.entries(pluginRuleList)) {
+    for (const rule of castArray(currentRuleList)) {
+      addRule(rules, `${plugin}/${rule}`, ruleSetting)
     }
   }
-  if (options.pluginWarningsCustomized) {
-    for (const [plugin, pluginWarningsCustomized] of Object.entries(options.pluginWarningsCustomized)) {
-      for (const [rule, customizationOptions] of Object.entries(pluginWarningsCustomized)) {
-        addRule(`${plugin}/${rule}`, customizationOptions)
-      }
+}
+const addCustomizedPluginRules = (rules: Rules, pluginCustomizedRuleList?: PluginCustomizedRuleList, transformRuleSetting: (ruleSetting: RuleSetting) => RuleSetting = ruleSetting => ruleSetting) => {
+  if (!pluginCustomizedRuleList) {
+    return
+  }
+  for (const [plugin, currentCustomizedRuleList] of Object.entries(pluginCustomizedRuleList)) {
+    for (const [rule, ruleSetting] of Object.entries(currentCustomizedRuleList)) {
+      addRule(rules, `${plugin}/${rule}`, transformRuleSetting(ruleSetting))
     }
   }
-  if (options.warningsCustomized) {
-    for (const [rule, customizationOptions] of Object.entries(options.warningsCustomized)) {
-      addRule(rule, customizationOptions)
+}
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
+const withWarningSeverity = (ruleSetting: RuleSetting): RuleSetting => {
+  if (ruleSetting === null || ruleSetting === undefined) {
+    return ruleSetting
+  }
+  if (Array.isArray(ruleSetting)) {
+    if (ruleSetting.length === 1) {
+      return [ruleSetting[0], warningSeverity]
     }
-  }
-  if (options.plugins) {
-    for (const [plugin, pluginErrors] of Object.entries(options.pluginErrors)) {
-      for (const rule of castArray(pluginErrors)) {
-        addRule(`${plugin}/${rule}`, true)
-      }
+    if (ruleSetting.length === 2 && isRecord(ruleSetting[1])) {
+      return [
+        ruleSetting[0], {
+          ...ruleSetting[1],
+          ...warningSeverity,
+        },
+      ]
     }
+    return [ruleSetting, warningSeverity]
   }
-  if (options.errors) {
-    for (const rule of castArray(options.errors)) {
-      addRule(rule, true)
+  return [ruleSetting, warningSeverity]
+}
+const normalizePlugins = (plugins?: Config['plugins']): PluginList => {
+  if (!plugins) {
+    return []
+  }
+  return [...castArray(plugins)] as PluginList
+}
+const appendPlugins = (target: PluginList, plugins?: Config['plugins']) => {
+  for (const plugin of normalizePlugins(plugins)) {
+    if (target.includes(plugin)) {
+      continue
     }
+    target.push(plugin)
   }
-  if (options.pluginWarnings) {
-    for (const [plugin, pluginWarnings] of Object.entries(options.pluginWarnings)) {
-      for (const rule of castArray(pluginWarnings)) {
-        addRule(`${plugin}/${rule}`, true)
-      }
-    }
+}
+const getGeneratedCustomSyntax = (extensions: Set<Extension>): Config['customSyntax'] => {
+  if (extensions.has('sass') && !extensions.has('scss')) {
+    return postcssSassPackageName
   }
-  if (options.warnings) {
-    for (const rule of castArray(options.warnings)) {
-      addRule(rule, true)
-    }
+  if (extensions.has('scss') && !extensions.has('sass')) {
+    return postcssScssPackageName
   }
-  const config: Merge<Config, {plugins: Array<Plugin | string>}> = {
-    rules,
-    plugins: [] as Array<Plugin | string>,
+}
+const getGeneratedOverrides = (extensions: Set<Extension>): Array<ConfigOverride> => {
+  if (!(extensions.has('sass') && extensions.has('scss'))) {
+    return []
   }
-  if (options.extensions.includes('scss') || options.extensions.includes('sass')) {
-    const {default: plugin} = (await import('stylelint-scss')) as {default: Plugin}
-    config.plugins.push(plugin)
+  return [
+    {
+      files: '**/*.sass',
+      customSyntax: postcssSassPackageName,
+    },
+    {
+      files: '**/*.scss',
+      customSyntax: postcssScssPackageName,
+    },
+  ]
+}
+const makeConfig = async (inputOptions?: MakeStylelintOptions) => {
+  const options = internalOptionsSchema.process(inputOptions)
+  const baseConfig = options.config ?? {}
+  const extensions = new Set(castArray(options.extensions))
+  const rules: Rules = {}
+  addPluginRules(rules, options.pluginOff, null)
+  addRules(rules, options.off, null)
+  addCustomizedPluginRules(rules, options.pluginErrorsCustomized)
+  addCustomizedRules(rules, options.errorsCustomized)
+  addCustomizedPluginRules(rules, options.pluginWarningsCustomized, withWarningSeverity)
+  addCustomizedRules(rules, options.warningsCustomized, withWarningSeverity)
+  addPluginRules(rules, options.pluginErrors, true)
+  addRules(rules, options.errors, true)
+  addPluginRules(rules, options.pluginWarnings, withWarningSeverity(true))
+  addRules(rules, options.warnings, withWarningSeverity(true))
+  const plugins = normalizePlugins(baseConfig.plugins)
+  appendPlugins(plugins, options.plugins)
+  if (extensions.has('sass') || extensions.has('scss')) {
+    appendPlugins(plugins, stylelintScssPackageName)
   }
-  if (options.extensions.includes('sass')) {
-    const {default: plugin} = (await import('postcss-sass')) as {default: CustomSyntax}
-    config.customSyntax = plugin
-  }
+  const customSyntax = getGeneratedCustomSyntax(extensions)
+  const overrides = [...baseConfig.overrides ?? [], ...getGeneratedOverrides(extensions)]
   const mergedConfig: Config = {
-    ...options.config,
-    ...config,
+    ...baseConfig,
+    rules: {
+      ...baseConfig.rules,
+      ...rules,
+    },
+  }
+  if (plugins.length > 0) {
+    mergedConfig.plugins = plugins
+  }
+  if (customSyntax) {
+    mergedConfig.customSyntax = customSyntax
+  }
+  if (overrides.length > 0) {
+    mergedConfig.overrides = overrides
   }
   return mergedConfig
 }

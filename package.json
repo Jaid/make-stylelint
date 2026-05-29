@@ -17,6 +17,9 @@
     "#src/*": "./src/*",
     "#root/*": "./*"
   },
+  "scripts": {
+    "test": "bun test --max-concurrency 1 ./test"
+  },
   "dependencies": {
     "es-toolkit": "^1.46.1",
     "optis": "^0.1.0"
