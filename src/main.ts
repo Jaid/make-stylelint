@@ -1,3 +1,4 @@
+import type {Dict} from 'more-types'
 import type {Config} from 'stylelint'
 import type {Arrayable} from 'type-fest'
 
@@ -5,15 +6,15 @@ import {castArray} from 'es-toolkit/compat'
 import optis from 'optis'
 
 type Extension = 'css' | 'sass' | 'scss'
-type RuleSecondaryOptions = Record<string, unknown>
-type RulePrimary = Array<unknown> | Record<string, unknown> | RegExp | boolean | number | string
+type RuleSecondaryOptions = Dict
+type RulePrimary = Array<unknown> | Dict | RegExp | boolean | number | string
 type RuleSetting = [RulePrimary, RuleSecondaryOptions] | [RulePrimary] | RulePrimary | null | undefined
-type Rules = Record<string, RuleSetting>
+type Rules = Dict<RuleSetting>
 type RuleList = Arrayable<string>
-type CustomizedRuleList = Record<string, RuleSetting>
+type CustomizedRuleList = Dict<RuleSetting>
 type PluginList = NonNullable<Extract<Config['plugins'], Array<unknown>>>
-type PluginRuleList = Record<string, RuleList>
-type PluginCustomizedRuleList = Record<string, CustomizedRuleList>
+type PluginRuleList = Dict<RuleList>
+type PluginCustomizedRuleList = Dict<CustomizedRuleList>
 type ConfigOverride = NonNullable<Config['overrides']>[number]
 type OptionsSchema = {
   process: (inputOptions?: MakeStylelintOptions) => ProcessedMakeStylelintOptions
@@ -120,7 +121,7 @@ const addCustomizedPluginRules = (rules: Rules, pluginCustomizedRuleList?: Plugi
     }
   }
 }
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
+const isRecord = (value: unknown): value is Dict => typeof value === 'object' && value !== null && !Array.isArray(value)
 const withWarningSeverity = (ruleSetting: RuleSetting): RuleSetting => {
   if (ruleSetting === null || ruleSetting === undefined) {
     return ruleSetting
